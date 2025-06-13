@@ -673,6 +673,8 @@ class DeepseekMoEGate(nn.Module):
         self.norm_topk_prob = config.norm_topk_prob
         self.weight = nn.Parameter(torch.empty((self.n_routed_experts, config.n_embd)))
         nn.init.kaiming_uniform_(self.weight, a=math.sqrt(5))
+        if config.loss_free_balance:
+            self.register_buffer("expert_bias", torch.zeros(self.n_routed_experts))
 
     def forward(
         self, hidden_states: torch.Tensor
@@ -680,45 +682,69 @@ class DeepseekMoEGate(nn.Module):
         bsz, seq_len, h = hidden_states.shape
         hidden_states = hidden_states.view(-1, h)
         logits = F.linear(hidden_states, self.weight, None)
-        if self.scoring_func == "softmax":
-            scores = logits.softmax(dim=-1, dtype=torch.float)
-        else:
+        aux_loss = None
+
+        if self.scoring_func != "softmax":
             raise NotImplementedError(
                 f"insupportable scoring function for MoE gating: {self.scoring_func}"
             )
+        scores = logits.softmax(dim=-1, dtype=torch.float)
 
-        topk_weight, topk_idx = torch.topk(scores, k=self.top_k, dim=-1, sorted=False)
+        if self.config.loss_free_balance and self.training:
+            # Loss-Free Balancing
+            # https://arxiv.org/abs/2408.15664
+            biased_logits = logits + self.expert_bias
+            _, topk_idx = torch.topk(biased_logits, k=self.top_k, dim=-1, sorted=False)
+            topk_weight = torch.gather(scores, -1, topk_idx)
+
+            with torch.no_grad():
+                # update expert bias
+                tokens_per_expert = torch.bincount(
+                    topk_idx.flatten(), minlength=self.n_routed_experts
+                )
+                load_error = tokens_per_expert - tokens_per_expert.mean()
+                bias_update = (
+                    load_error.sign() * self.config.loss_free_balance_update_rate
+                )
+                self.expert_bias += bias_update
+        else:
+            topk_weight, topk_idx = torch.topk(
+                scores, k=self.top_k, dim=-1, sorted=False
+            )
+
+            if self.training and self.alpha > 0.0:
+                scores_for_aux = scores
+                aux_topk = self.top_k
+                topk_idx_for_aux_loss = topk_idx.view(bsz, -1)
+                if self.seq_aux:
+                    scores_for_seq_aux = scores_for_aux.view(bsz, seq_len, -1)
+                    ce = torch.zeros(
+                        bsz, self.n_routed_experts, device=hidden_states.device
+                    )
+                    ce.scatter_add_(
+                        1,
+                        topk_idx_for_aux_loss,
+                        torch.ones(
+                            bsz, seq_len * aux_topk, device=hidden_states.device
+                        ),
+                    ).div_(seq_len * aux_topk / self.n_routed_experts)
+                    aux_loss = (ce * scores_for_seq_aux.mean(dim=1)).sum(
+                        dim=1
+                    ).mean() * self.alpha
+                else:
+                    mask_ce = F.one_hot(
+                        topk_idx_for_aux_loss.view(-1),
+                        num_classes=self.n_routed_experts,
+                    )
+                    ce = mask_ce.float().mean(0)
+                    pi = scores_for_aux.mean(0)
+                    fi = ce * self.n_routed_experts
+                    aux_loss = (pi * fi).sum() * self.alpha
 
         if self.top_k > 1 and self.norm_topk_prob:
             denominator = topk_weight.sum(dim=-1, keepdim=True) + 1e-20
             topk_weight = topk_weight / denominator
 
-        aux_loss = None
-        if self.training and self.alpha > 0.0:
-            scores_for_aux = scores
-            aux_topk = self.top_k
-            topk_idx_for_aux_loss = topk_idx.view(bsz, -1)
-            if self.seq_aux:
-                scores_for_seq_aux = scores_for_aux.view(bsz, seq_len, -1)
-                ce = torch.zeros(
-                    bsz, self.n_routed_experts, device=hidden_states.device
-                )
-                ce.scatter_add_(
-                    1,
-                    topk_idx_for_aux_loss,
-                    torch.ones(bsz, seq_len * aux_topk, device=hidden_states.device),
-                ).div_(seq_len * aux_topk / self.n_routed_experts)
-                aux_loss = (ce * scores_for_seq_aux.mean(dim=1)).sum(
-                    dim=1
-                ).mean() * self.alpha
-            else:
-                mask_ce = F.one_hot(
-                    topk_idx_for_aux_loss.view(-1), num_classes=self.n_routed_experts
-                )
-                ce = mask_ce.float().mean(0)
-                pi = scores_for_aux.mean(0)
-                fi = ce * self.n_routed_experts
-                aux_loss = (pi * fi).sum() * self.alpha
         return topk_idx, topk_weight, aux_loss
 
 
@@ -768,7 +794,8 @@ class DeepseekMoE(nn.Module):
                 y[flat_topk_idx == i] = expert(x[flat_topk_idx == i])
             y = (y.view(*topk_weight.shape, -1) * topk_weight.unsqueeze(-1)).sum(dim=1)
             y = y.view(*orig_shape)
-            y = AddDeepseekAuxiliaryLoss.apply(y, aux_loss)
+            if aux_loss is not None:
+                y = AddDeepseekAuxiliaryLoss.apply(y, aux_loss)
         else:
             y = self.moe_infer(x, flat_topk_idx, topk_weight.view(-1, 1)).view(
                 *orig_shape
