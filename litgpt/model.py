@@ -25,11 +25,15 @@ class GPT(nn.Module):
         assert config.padded_vocab_size is not None
         self.config = config
 
-        self.lm_head = nn.Linear(config.n_embd, config.padded_vocab_size, bias=config.lm_head_bias)
+        self.lm_head = nn.Linear(
+            config.n_embd, config.padded_vocab_size, bias=config.lm_head_bias
+        )
         self.transformer = nn.ModuleDict(
             dict(
                 wte=nn.Embedding(config.padded_vocab_size, config.n_embd),
-                h=nn.ModuleList(Block(config, block_idx) for block_idx in range(config.n_layer)),
+                h=nn.ModuleList(
+                    Block(config, block_idx) for block_idx in range(config.n_layer)
+                ),
                 ln_f=config.norm_class(config.n_embd, eps=config.norm_eps),
             )
         )
@@ -117,14 +121,20 @@ class GPT(nn.Module):
         """
         T = idx.size(1)
         if self.max_seq_length < T:
-            raise ValueError(f"Cannot forward sequence of length {T}, max seq length is only {self.max_seq_length}.")
+            raise ValueError(
+                f"Cannot forward sequence of length {T}, max seq length is only {self.max_seq_length}."
+            )
 
         if input_pos is not None:  # use the kv cache
             if input_pos.dim() > 2:
                 # otherwise, things go wrong in `apply_rope`
-                raise ValueError(f"input_pos must have 1 or 2 dimensions, input_pos.shape = {input_pos.shape}")
+                raise ValueError(
+                    f"input_pos must have 1 or 2 dimensions, input_pos.shape = {input_pos.shape}"
+                )
             if input_pos.shape[-1] != T:
-                raise ValueError(f"input_pos.shape[-1] = {input_pos.shape[-1]} != {T} = idx.shape[1], must be the same")
+                raise ValueError(
+                    f"input_pos.shape[-1] = {input_pos.shape[-1]} != {T} = idx.shape[1], must be the same"
+                )
             cos = batched_index_select(self.cos, 0, input_pos)
             sin = batched_index_select(self.sin, 0, input_pos)
             if input_pos.dim() == 1:
@@ -140,7 +150,9 @@ class GPT(nn.Module):
             if input_pos_maxp1 is not None:
                 # Shorten final dimension so it just covers all `input_pos` entries
                 if input_pos_maxp1 > self.max_seq_length:
-                    raise ValueError(f"Positions in 'input_pos' must be in [0,{self.max_seq_length})")
+                    raise ValueError(
+                        f"Positions in 'input_pos' must be in [0,{self.max_seq_length})"
+                    )
                 mask = mask[..., :input_pos_maxp1]
         else:
             # unsqueeze to have a batch dimension
@@ -174,7 +186,10 @@ class GPT(nn.Module):
         )
         if lm_head_chunk_size > 0:
             # chunk the lm head logits to reduce the peak memory used by autograd
-            return [clamp_head(self.lm_head(x_i)) for x_i in x.split(lm_head_chunk_size, dim=1)]
+            return [
+                clamp_head(self.lm_head(x_i))
+                for x_i in x.split(lm_head_chunk_size, dim=1)
+            ]
         else:
             return clamp_head(self.lm_head(x))  # (B, T, padded_vocab_size)
 
@@ -182,28 +197,46 @@ class GPT(nn.Module):
     def from_name(cls, name: str, **kwargs: Any) -> Self:
         return cls(Config.from_name(name, **kwargs))
 
-    def rope_cache(self, device: Optional[torch.device] = None) -> Tuple[torch.Tensor, torch.Tensor]:
+    def rope_cache(
+        self, device: Optional[torch.device] = None
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
         if self.config.rope_adjustments is None:
             extra_config = None
 
         else:
-            adjusted_params_required = ["factor", "low_freq_factor", "high_freq_factor", "original_max_seq_len"]
-            params_present = [param in self.config.rope_adjustments for param in adjusted_params_required]
+            adjusted_params_required = [
+                "factor",
+                "low_freq_factor",
+                "high_freq_factor",
+                "original_max_seq_len",
+            ]
+            params_present = [
+                param in self.config.rope_adjustments
+                for param in adjusted_params_required
+            ]
             num_params_present = sum(params_present)
 
             if num_params_present == 0:
                 extra_config = None  # uses standard RoPE
             elif num_params_present == 4:
                 # These parameters should always be used together so that we don't interfere with standard rope
-                extra_config = {name: self.config.rope_adjustments[name] for name in adjusted_params_required}
+                extra_config = {
+                    name: self.config.rope_adjustments[name]
+                    for name in adjusted_params_required
+                }
             elif "factor" in self.config.rope_adjustments:
                 # linear RoPE
                 adjusted_params_required = ["factor"]
-                extra_config = {name: self.config.rope_adjustments[name] for name in adjusted_params_required}
+                extra_config = {
+                    name: self.config.rope_adjustments[name]
+                    for name in adjusted_params_required
+                }
             else:
                 # Some but not all parameters are specified; raise an error
                 missing_params = [
-                    param for param, present in zip(adjusted_params_required, params_present) if not present
+                    param
+                    for param, present in zip(adjusted_params_required, params_present)
+                    if not present
                 ]
                 raise ValueError(
                     f"The following adjusted RoPE parameters are missing in rope_adjustments: {', '.join(missing_params)}. "
@@ -271,19 +304,36 @@ class Block(nn.Module):
                 " (non-parallel residual and shared attention norm)."
             )
 
-        self.norm_1 = nn.Identity() if not config.norm_1 else config.norm_class(config.n_embd, eps=config.norm_eps)
+        self.norm_1 = (
+            nn.Identity()
+            if not config.norm_1
+            else config.norm_class(config.n_embd, eps=config.norm_eps)
+        )
         self.attn = CausalSelfAttention(config, block_idx)
         self.post_attention_norm = (
-            config.norm_class(config.n_embd, eps=config.norm_eps) if config.post_attention_norm else nn.Identity()
+            config.norm_class(config.n_embd, eps=config.norm_eps)
+            if config.post_attention_norm
+            else nn.Identity()
         )
         self.norm_2 = (
             nn.Identity()
             if not config.norm_2
-            else (None if config.shared_attention_norm else config.norm_class(config.n_embd, eps=config.norm_eps))
+            else (
+                None
+                if config.shared_attention_norm
+                else config.norm_class(config.n_embd, eps=config.norm_eps)
+            )
         )
-        self.mlp = config.mlp_class(config)
+
+        if config.mlp_class_name == "DeepseekMoE" and block_idx == 0:
+            self.mlp = LLaMAMLP(config)
+        else:
+            self.mlp = config.mlp_class(config)
+
         self.post_mlp_norm = (
-            config.norm_class(config.n_embd, eps=config.norm_eps) if config.post_mlp_norm else nn.Identity()
+            config.norm_class(config.n_embd, eps=config.norm_eps)
+            if config.post_mlp_norm
+            else nn.Identity()
         )
 
         self.config = config
@@ -319,7 +369,9 @@ class Block(nn.Module):
         """
 
         x_normed = self.norm_1(x)
-        attention_output = self.attn(x_normed, cos, sin, mask, input_pos, input_pos_maxp1)
+        attention_output = self.attn(
+            x_normed, cos, sin, mask, input_pos, input_pos_maxp1
+        )
         attention_output = self.post_attention_norm(attention_output)
 
         if self.config.parallel_residual:
@@ -339,21 +391,35 @@ class CausalSelfAttention(nn.Module):
         # key, query and value projections for all heads, but in a batch
         self.qkv = nn.Linear(
             config.n_embd,
-            (config.n_head + 2 * config.n_query_groups) * config.head_size,  # support for grouped/multi queries
+            (config.n_head + 2 * config.n_query_groups)
+            * config.head_size,  # support for grouped/multi queries
             bias=config.bias or config.attn_bias,
         )
         # output projection
-        self.proj = nn.Linear(config.head_size * config.n_head, config.n_embd, bias=config.bias)
+        self.proj = nn.Linear(
+            config.head_size * config.n_head, config.n_embd, bias=config.bias
+        )
         # disabled by default
         self.kv_cache: Optional[KVCache] = None
         self.apply_sliding_window_attention = False
-        if config.sliding_window_size is not None and config.sliding_window_indices is not None:
-            self.apply_sliding_window_attention = config.sliding_window_indices[block_idx]
+        if (
+            config.sliding_window_size is not None
+            and config.sliding_window_indices is not None
+        ):
+            self.apply_sliding_window_attention = config.sliding_window_indices[
+                block_idx
+            ]
 
         if config.norm_qk:
-            norm_q_size = config.n_head * config.head_size if config.norm_qk_type == "olmo2" else config.head_size
+            norm_q_size = (
+                config.n_head * config.head_size
+                if config.norm_qk_type == "olmo2"
+                else config.head_size
+            )
             norm_k_size = (
-                config.n_query_groups * config.head_size if config.norm_qk_type == "olmo2" else config.head_size
+                config.n_query_groups * config.head_size
+                if config.norm_qk_type == "olmo2"
+                else config.head_size
             )
             self.norm_q = config.norm_class(norm_q_size, eps=config.norm_eps)
             self.norm_k = config.norm_class(norm_k_size, eps=config.norm_eps)
@@ -383,7 +449,9 @@ class CausalSelfAttention(nn.Module):
         n_head = self.config.n_head
         n_query_groups = self.config.n_query_groups
         rope_n_elem = self.config.rope_n_elem
-        B, T, C = x.size()  # batch size, sequence length, embedding dimensionality (n_embd)
+        B, T, C = (
+            x.size()
+        )  # batch size, sequence length, embedding dimensionality (n_embd)
 
         # Perform a single multiplication operation using a combined QKV matrix to calculate `query`, `key`, and `value`
         # instead of individually multiplying the input `x` with the respective weight matrices.
@@ -458,7 +526,9 @@ class CausalSelfAttention(nn.Module):
                 mask = torch.ones(T, T, dtype=q.dtype, device=q.device).triu(diagonal=1)
                 mask.masked_fill_(mask.bool(), float("-inf"))
                 mask = mask.view(1, 1, *mask.shape)
-            sliding_window_bias = torch.ones_like(mask).tril(diagonal=-self.config.sliding_window_size)
+            sliding_window_bias = torch.ones_like(mask).tril(
+                diagonal=-self.config.sliding_window_size
+            )
             sliding_window_bias.masked_fill_(sliding_window_bias.bool(), float("-inf"))
             mask += sliding_window_bias
 
@@ -474,23 +544,37 @@ class CausalSelfAttention(nn.Module):
         return self.proj(y)  # (B, T, C)
 
     def scaled_dot_product_attention(
-        self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, mask: Optional[torch.Tensor] = None
+        self,
+        q: torch.Tensor,
+        k: torch.Tensor,
+        v: torch.Tensor,
+        mask: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
-        scale = 1.0 / math.sqrt(self.config.attention_scores_scalar or self.config.head_size)
+        scale = 1.0 / math.sqrt(
+            self.config.attention_scores_scalar or self.config.head_size
+        )
 
         # with softcapping we cannot use SDPA
         if self.config.attention_logit_softcapping is not None:
             scores = q @ k.mT * scale
             scores = do_softcapping(scores, self.config.attention_logit_softcapping)
             if mask is None:
-                mask = torch.ones(q.size(2), q.size(2), dtype=q.dtype, device=q.device).triu(diagonal=1)
+                mask = torch.ones(
+                    q.size(2), q.size(2), dtype=q.dtype, device=q.device
+                ).triu(diagonal=1)
                 mask.masked_fill_(mask.bool(), torch.finfo(q.dtype).min)
             scores = scores + mask
             scores = F.softmax(scores, dim=-1, dtype=torch.float).to(dtype=q.dtype)
             y = scores @ v
         else:
             y = F.scaled_dot_product_attention(
-                q, k, v, attn_mask=mask, dropout_p=0.0, scale=scale, is_causal=mask is None
+                q,
+                k,
+                v,
+                attn_mask=mask,
+                dropout_p=0.0,
+                scale=scale,
+                is_causal=mask is None,
             )
         return y.transpose(1, 2)
 
@@ -502,10 +586,17 @@ class CausalSelfAttention(nn.Module):
         device: Optional[torch.device] = None,
         dtype: Optional[torch.dtype] = None,
     ) -> "KVCache":
-        v_shape = (batch_size, self.config.n_query_groups, max_seq_length, self.config.head_size)
+        v_shape = (
+            batch_size,
+            self.config.n_query_groups,
+            max_seq_length,
+            self.config.head_size,
+        )
         if rope_cache_length is None:
             if self.config.rotary_percentage != 1.0:
-                raise TypeError("Please pass the `rope_cache_length=gpt.cos.size(-1)` value")
+                raise TypeError(
+                    "Please pass the `rope_cache_length=gpt.cos.size(-1)` value"
+                )
             k_shape = v_shape
         else:
             k_shape = (
@@ -516,14 +607,18 @@ class CausalSelfAttention(nn.Module):
             )
         return KVCache(k_shape, v_shape, device=device, dtype=dtype)
 
-    def _load_from_state_dict(self, state_dict: dict, prefix: str, *args: Any, **kwargs: Any) -> None:
+    def _load_from_state_dict(
+        self, state_dict: dict, prefix: str, *args: Any, **kwargs: Any
+    ) -> None:
         """For compatibility with legacy checkpoints."""
 
         for attr in ("weight", "bias"):
             legacy_key = f"{prefix}attn.{attr}"
             current_key = f"{prefix}qkv.{attr}"
             if legacy_key in state_dict:
-                state_dict[current_key] = qkv_reassemble(state_dict.pop(legacy_key), self.config)
+                state_dict[current_key] = qkv_reassemble(
+                    state_dict.pop(legacy_key), self.config
+                )
 
         super()._load_from_state_dict(state_dict, prefix, *args, **kwargs)
 
@@ -566,12 +661,159 @@ class GemmaMLP(LLaMAMLP):
         return self.proj(x)
 
 
+class DeepseekMoEGate(nn.Module):
+    def __init__(self, config: Config) -> None:
+        super().__init__()
+        self.config = config
+        self.top_k = config.n_expert_per_token
+        self.n_routed_experts = config.n_expert
+        self.scoring_func = config.scoring_func
+        self.alpha = config.aux_loss_alpha
+        self.seq_aux = config.seq_aux
+        self.norm_topk_prob = config.norm_topk_prob
+        self.weight = nn.Parameter(torch.empty((self.n_routed_experts, config.n_embd)))
+        nn.init.kaiming_uniform_(self.weight, a=math.sqrt(5))
+
+    def forward(
+        self, hidden_states: torch.Tensor
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        bsz, seq_len, h = hidden_states.shape
+        hidden_states = hidden_states.view(-1, h)
+        logits = F.linear(hidden_states, self.weight, None)
+        if self.scoring_func == "softmax":
+            scores = logits.softmax(dim=-1, dtype=torch.float)
+        else:
+            raise NotImplementedError(
+                f"insupportable scoring function for MoE gating: {self.scoring_func}"
+            )
+
+        topk_weight, topk_idx = torch.topk(scores, k=self.top_k, dim=-1, sorted=False)
+
+        if self.top_k > 1 and self.norm_topk_prob:
+            denominator = topk_weight.sum(dim=-1, keepdim=True) + 1e-20
+            topk_weight = topk_weight / denominator
+
+        aux_loss = None
+        if self.training and self.alpha > 0.0:
+            scores_for_aux = scores
+            aux_topk = self.top_k
+            topk_idx_for_aux_loss = topk_idx.view(bsz, -1)
+            if self.seq_aux:
+                scores_for_seq_aux = scores_for_aux.view(bsz, seq_len, -1)
+                ce = torch.zeros(
+                    bsz, self.n_routed_experts, device=hidden_states.device
+                )
+                ce.scatter_add_(
+                    1,
+                    topk_idx_for_aux_loss,
+                    torch.ones(bsz, seq_len * aux_topk, device=hidden_states.device),
+                ).div_(seq_len * aux_topk / self.n_routed_experts)
+                aux_loss = (ce * scores_for_seq_aux.mean(dim=1)).sum(
+                    dim=1
+                ).mean() * self.alpha
+            else:
+                mask_ce = F.one_hot(
+                    topk_idx_for_aux_loss.view(-1), num_classes=self.n_routed_experts
+                )
+                ce = mask_ce.float().mean(0)
+                pi = scores_for_aux.mean(0)
+                fi = ce * self.n_routed_experts
+                aux_loss = (pi * fi).sum() * self.alpha
+        return topk_idx, topk_weight, aux_loss
+
+
+class AddDeepseekAuxiliaryLoss(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, x: torch.Tensor, loss: torch.Tensor) -> torch.Tensor:
+        ctx.dtype = loss.dtype
+        ctx.required_aux_loss = loss.requires_grad
+        return x
+
+    @staticmethod
+    def backward(
+        ctx, grad_output: torch.Tensor
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+        grad_loss = None
+        if ctx.required_aux_loss:
+            grad_loss = torch.ones(1, dtype=ctx.dtype, device=grad_output.device)
+        return grad_output, grad_loss
+
+
+class DeepseekMoE(nn.Module):
+    def __init__(self, config: Config) -> None:
+        super().__init__()
+        self.config = config
+        self.n_expert_per_token = config.n_expert_per_token
+        self.experts = nn.ModuleList(
+            LLaMAMLP(config, intermediate_size=config.moe_intermediate_size)
+            for _ in range(config.n_expert)
+        )
+        self.gate = DeepseekMoEGate(config)
+        if config.n_shared_experts is not None:
+            self.shared_experts = LLaMAMLP(
+                config, intermediate_size=config.intermediate_size
+            )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        identity = x
+        orig_shape = x.shape
+        topk_idx, topk_weight, aux_loss = self.gate(x)
+        x = x.view(-1, x.shape[-1])
+        flat_topk_idx = topk_idx.view(-1)
+
+        if self.training:
+            x = x.repeat_interleave(self.n_expert_per_token, dim=0)
+            y = torch.empty_like(x)
+            for i, expert in enumerate(self.experts):
+                y[flat_topk_idx == i] = expert(x[flat_topk_idx == i])
+            y = (y.view(*topk_weight.shape, -1) * topk_weight.unsqueeze(-1)).sum(dim=1)
+            y = y.view(*orig_shape)
+            y = AddDeepseekAuxiliaryLoss.apply(y, aux_loss)
+        else:
+            y = self.moe_infer(x, flat_topk_idx, topk_weight.view(-1, 1)).view(
+                *orig_shape
+            )
+
+        if self.config.n_shared_experts is not None:
+            y = y + self.shared_experts(identity)
+        return y
+
+    @torch.no_grad()
+    def moe_infer(
+        self,
+        x: torch.Tensor,
+        flat_expert_indices: torch.Tensor,
+        flat_expert_weights: torch.Tensor,
+    ) -> torch.Tensor:
+        expert_cache = torch.zeros_like(x)
+        idxs = flat_expert_indices.argsort()
+        tokens_per_expert = flat_expert_indices.bincount().cpu().numpy().cumsum(0)
+        token_idxs = idxs // self.n_expert_per_token
+        for i, end_idx in enumerate(tokens_per_expert):
+            start_idx = 0 if i == 0 else tokens_per_expert[i - 1]
+            if start_idx == end_idx:
+                continue
+            expert = self.experts[i]
+            exp_token_idx = token_idxs[start_idx:end_idx]
+            expert_tokens = x[exp_token_idx]
+            expert_out = expert(expert_tokens)
+            expert_out.mul_(flat_expert_weights[idxs[start_idx:end_idx]])
+            expert_cache.scatter_reduce_(
+                0,
+                exp_token_idx.view(-1, 1).repeat(1, x.shape[-1]),
+                expert_out,
+                reduce="sum",
+            )
+        return expert_cache
+
+
 class LLaMAMoE(nn.Module):
     def __init__(self, config: Config) -> None:
         super().__init__()
         self.gate = nn.Linear(config.n_embd, config.n_expert, bias=False)
         self.experts = nn.ModuleList(
-            LLaMAMLP(config, intermediate_size=config.moe_intermediate_size) for _ in range(config.n_expert)
+            LLaMAMLP(config, intermediate_size=config.moe_intermediate_size)
+            for _ in range(config.n_expert)
         )
         self.config = config
 
@@ -580,12 +822,18 @@ class LLaMAMoE(nn.Module):
         Derived from: https://github.com/mistralai/mistral-src/blob/b46d6/moe_one_file_ref.py#L203-L219
         See also figure 1 in https://arxiv.org/abs/2211.15841
         """
-        B, T, C = x.size()  # batch size, sequence length, embedding dimensionality (n_embd)
+        B, T, C = (
+            x.size()
+        )  # batch size, sequence length, embedding dimensionality (n_embd)
         x = x.view(-1, C)  # (B*T, C)
         router = self.gate(x)  # (B*T, n_expert)
-        probs, indices = torch.topk(router, self.config.n_expert_per_token)  # (B*T, n_expert_per_token)
+        probs, indices = torch.topk(
+            router, self.config.n_expert_per_token
+        )  # (B*T, n_expert_per_token)
         probs = probs.softmax(dim=1, dtype=torch.float).to(dtype=x.dtype)
-        masks = indices.unsqueeze(-1) == torch.arange(self.config.n_expert, device=x.device)
+        masks = indices.unsqueeze(-1) == torch.arange(
+            self.config.n_expert, device=x.device
+        )
         masks = masks.permute(2, 0, 1)  # (n_expert, B*T, n_expert_per_token)
         y = torch.zeros_like(x)  # (B*T, C)
         for mask, expert in zip(masks, self.experts):
@@ -631,11 +879,15 @@ def build_rope_cache(
 
             wavelen = 2 * torch.pi / theta
             ratio = orig_context_len / wavelen
-            smooth_factor = (ratio - low_freq_factor) / (high_freq_factor - low_freq_factor)
+            smooth_factor = (ratio - low_freq_factor) / (
+                high_freq_factor - low_freq_factor
+            )
             smooth_factor = torch.clamp(smooth_factor, min=0.0, max=1.0)
 
             # Compute adjusted_theta without masked indexing
-            adjusted_theta = (1 - smooth_factor) * (theta / factor) + smooth_factor * theta
+            adjusted_theta = (1 - smooth_factor) * (
+                theta / factor
+            ) + smooth_factor * theta
             theta = adjusted_theta
         else:
             theta = theta / factor
@@ -658,7 +910,10 @@ def build_rope_cache(
     # if rope_local_base_freq is given, have a separate rope value for local embedding
     # For now, we use default RoPE for local embedding
     if rope_local_base_freq is not None:
-        local_theta = 1.0 / (rope_local_base_freq ** (torch.arange(0, n_elem, 2, device=device).float() / n_elem))
+        local_theta = 1.0 / (
+            rope_local_base_freq
+            ** (torch.arange(0, n_elem, 2, device=device).float() / n_elem)
+        )
         local_idx_theta = torch.outer(seq_idx, local_theta)
         local_idx_theta = local_idx_theta.repeat(1, 2)
         if local_idx_theta.shape[-1] > n_elem > 1:
@@ -754,7 +1009,9 @@ def apply_rope(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.T
     if cos.dim() != 3:
         raise ValueError(f"cos must be three-dimensional, but shape is {cos.shape}")
     if cos.shape != sin.shape:
-        raise ValueError(f"cos, sin must have same shape, but cos.shape={cos.shape}, sin.shape={sin.shape}")
+        raise ValueError(
+            f"cos, sin must have same shape, but cos.shape={cos.shape}, sin.shape={sin.shape}"
+        )
     head_size_half = x.size(-1) // 2
     x1 = x[..., :head_size_half]  # (B, ..., T, head_size/2)
     x2 = x[..., head_size_half:]  # (B, ..., T, head_size/2)
@@ -788,10 +1045,16 @@ class KVCache(nn.Module):
         dtype: Optional[torch.dtype] = None,
     ) -> None:
         super().__init__()
-        self.register_buffer("k", torch.zeros(k_shape, device=device, dtype=dtype), persistent=False)
-        self.register_buffer("v", torch.zeros(v_shape, device=device, dtype=dtype), persistent=False)
+        self.register_buffer(
+            "k", torch.zeros(k_shape, device=device, dtype=dtype), persistent=False
+        )
+        self.register_buffer(
+            "v", torch.zeros(v_shape, device=device, dtype=dtype), persistent=False
+        )
 
-    def forward(self, input_pos: torch.Tensor, k: torch.Tensor, v: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    def forward(
+        self, input_pos: torch.Tensor, k: torch.Tensor, v: torch.Tensor
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Writes new values `k` and `v` into the cache at the positions specified
         by `input_pos` along the sequence dimension (`max_seq_length`). The batch
@@ -823,7 +1086,9 @@ class KVCache(nn.Module):
         torch.nn.init.zeros_(self.v)
 
 
-def build_mask_cache(max_seq_length: int, device: Optional[torch.device] = None) -> torch.Tensor:
+def build_mask_cache(
+    max_seq_length: int, device: Optional[torch.device] = None
+) -> torch.Tensor:
     ones = torch.ones((max_seq_length, max_seq_length), device=device, dtype=torch.bool)
     return torch.tril(ones).unsqueeze(0).unsqueeze(0)
 
@@ -835,7 +1100,9 @@ class RMSNorm(torch.nn.Module):
     https://github.com/bzhangGo/rmsnorm/blob/master/LICENSE.
     """
 
-    def __init__(self, size: int, dim: int = -1, eps: float = 1e-6, add_unit_offset: bool = False) -> None:
+    def __init__(
+        self, size: int, dim: int = -1, eps: float = 1e-6, add_unit_offset: bool = False
+    ) -> None:
         super().__init__()
         self.weight = torch.nn.Parameter(torch.ones(size))
         self.eps = eps

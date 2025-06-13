@@ -84,10 +84,19 @@ class Config:
     intermediate_size: Optional[int] = None
     moe_intermediate_size: Optional[int] = None
     bias: bool = True
-    mlp_class_name: Literal["GptNeoxMLP", "LLaMAMLP", "GemmaMLP", "LLaMAMoE"] = "GptNeoxMLP"
+    mlp_class_name: Literal[
+        "GptNeoxMLP", "LLaMAMLP", "GemmaMLP", "LLaMAMoE", "DeepseekMoE"
+    ] = "GptNeoxMLP"
     gelu_approximate: str = "none"
     n_expert: int = 0
     n_expert_per_token: int = 0
+    # DeepseekMoE
+    n_shared_experts: int = 0
+    # MoE Gate
+    norm_topk_prob: bool = False
+    scoring_func: str = "softmax"
+    aux_loss_alpha: float = 0.001
+    seq_aux: bool = False
     # GPT before/after blocks
     scale_embeddings: bool = False
     lm_head_bias: bool = False
@@ -872,7 +881,12 @@ configs.append(
         mlp_class_name="LLaMAMLP",
         intermediate_size=28672,
         rope_base=500000,
-        rope_adjustments=dict(factor=8.0, low_freq_factor=1.0, high_freq_factor=4.0, original_max_seq_len=8192),
+        rope_adjustments=dict(
+            factor=8.0,
+            low_freq_factor=1.0,
+            high_freq_factor=4.0,
+            original_max_seq_len=8192,
+        ),
     ),
 )
 
@@ -1316,6 +1330,41 @@ freewilly_2 = [
     )
 ]
 configs.extend(freewilly_2)
+
+
+#################
+# Deepseek MoE
+#################
+deepseek_moe = [
+    # https://huggingface.co/deepseek-ai/deepseek-moe-16b-base/blob/main/config.json
+    dict(
+        name="Deepseek-MoE-16B",
+        hf_config=dict(org="deepseek-ai", name="deepseek-moe-16b-base"),
+        vocab_size=102400,
+        padded_vocab_size=102400,
+        n_layer=28,
+        n_embd=2048,
+        n_head=16,
+        n_query_groups=16,
+        parallel_residual=True,
+        bias=False,
+        norm_class_name="RMSNorm",
+        norm_eps=1e-6,
+        mlp_class_name="DeepseekMoE",
+        intermediate_size=5632,  # 10944 in HF is a mistake
+        # MoE
+        n_expert=64,
+        n_expert_per_token=6,
+        # DeepseekMoE
+        n_shared_experts=2,
+        moe_intermediate_size=1408,
+        # MoE Gate
+        norm_topk_prob=True,
+        rope_base=10000,
+        rotary_percentage=1.0,
+    )
+]
+configs.extend(deepseek_moe)
 
 
 ##################
