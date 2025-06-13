@@ -159,6 +159,7 @@ class Config:
 
         conf_dict = conf_dict.copy()
         conf_dict.update(kwargs)
+
         return cls(**conf_dict)
 
     @classmethod
